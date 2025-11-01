@@ -43,8 +43,14 @@ Respond ONLY with a JSON object with these fields:
       userPrompt = `Analyze the emotion in this text: "${input}"`;
       messages.push({ role: 'user', content: userPrompt });
     } else if (mode === 'VOICE') {
-      userPrompt = `Analyze the emotion in this voice transcript: "${input}"`;
-      messages.push({ role: 'user', content: userPrompt });
+      // For voice, input is base64 audio
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Analyze the emotion in this voice audio based on tone, pitch, and speaking style:' },
+          { type: 'image_url', image_url: { url: input } }
+        ]
+      });
     } else if (mode === 'WEBCAM') {
       // For webcam, input is base64 image
       messages.push({

@@ -25,6 +25,8 @@ const Index = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     return () => {
@@ -68,48 +70,48 @@ const Index = () => {
     analyzeEmotion(InputMode.TEXT, textInput);
   };
 
-  const startVoiceRecording = () => {
-    if (!isSpeechRecognitionSupported) {
-      toast({
-        title: "Not Supported",
-        description: "Speech recognition is not supported in your browser.",
-        variant: "destructive"
-      });
-      return;
-    }
+  const startVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
 
-    recognition.onstart = () => {
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        
+        reader.onloadend = async () => {
+          const base64Audio = reader.result as string;
+          setVoiceTranscript("Analyzing audio...");
+          await analyzeEmotion(InputMode.VOICE, base64Audio);
+        };
+        
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start();
       setStatus(AppStatus.LISTENING);
       setVoiceTranscript("");
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setVoiceTranscript(transcript);
-      analyzeEmotion(InputMode.VOICE, transcript);
-    };
-
-    recognition.onerror = () => {
-      setStatus(AppStatus.ERROR);
+    } catch (error) {
       toast({
-        title: "Recording Failed",
-        description: "Failed to record voice. Please try again.",
+        title: "Microphone Access Denied",
+        description: "Please allow microphone access to use this feature.",
         variant: "destructive"
       });
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
+    }
   };
 
   const stopVoiceRecording = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
       setStatus(AppStatus.IDLE);
     }
   };
