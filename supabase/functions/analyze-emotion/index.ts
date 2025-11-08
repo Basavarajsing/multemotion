@@ -94,8 +94,30 @@ Respond ONLY with a JSON object with these fields:
     }
 
     const data = await response.json();
-    const content = data.choices[0].message.content;
-    const result: EmotionResponse = JSON.parse(content);
+    const content = data.choices?.[0]?.message?.content ?? "";
+
+    // Robust JSON parsing: handle accidental Markdown fences or extra text
+    const extractJson = (text: string): string => {
+      const trimmed = (text || "").trim();
+      if (trimmed.startsWith("```") ) {
+        // remove leading ```json or ``` and trailing ```
+        return trimmed
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/```$/i, "")
+          .trim();
+      }
+      // fallback: grab first JSON object in the text
+      const match = trimmed.match(/\{[\s\S]*\}/);
+      return match ? match[0] : trimmed;
+    };
+
+    let result: EmotionResponse;
+    try {
+      result = JSON.parse(content);
+    } catch {
+      const cleaned = extractJson(content);
+      result = JSON.parse(cleaned);
+    }
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
