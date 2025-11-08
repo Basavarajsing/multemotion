@@ -32,24 +32,24 @@ Respond ONLY with a JSON object with these fields:
 - confidence: Float between 0.0 and 1.0
 - explanation: Brief explanation (1-2 sentences)
 - emoji: Single emoji representing the emotion
-- color: Tailwind CSS color name (e.g., "yellow-400", "blue-500", "red-500")`;
+- color: Tailwind CSS color name (e.g., "yellow-400", "blue-500", "red-500").
+Do not include markdown code fences or any text outside the JSON object.`;
 
-    let userPrompt = '';
     const messages: any[] = [
-      { role: 'system', content: systemPrompt }
+      { role: 'system', content: systemPrompt },
     ];
 
     if (mode === 'TEXT') {
-      userPrompt = `Analyze the emotion in this text: "${input}"`;
-      messages.push({ role: 'user', content: userPrompt });
+      messages.push({ role: 'user', content: `Analyze the emotion in this text: "${input}"` });
     } else if (mode === 'VOICE') {
-      // For voice, input is base64 audio
+      // For voice, input is base64 audio (data URL). Some models accept this via content parts.
       messages.push({
         role: 'user',
         content: [
           { type: 'text', text: 'Analyze the emotion in this voice audio based on tone, pitch, and speaking style:' },
-          { type: 'image_url', image_url: { url: input } }
-        ]
+          // Using image_url-like shape because of OpenAI-compatible gateway; some models accept data URLs
+          { type: 'image_url', image_url: { url: input } },
+        ],
       });
     } else if (mode === 'WEBCAM') {
       // For webcam, input is base64 image
@@ -57,21 +57,21 @@ Respond ONLY with a JSON object with these fields:
         role: 'user',
         content: [
           { type: 'text', text: 'Analyze the emotion shown in this facial expression:' },
-          { type: 'image_url', image_url: { url: input } }
-        ]
+          { type: 'image_url', image_url: { url: input } },
+        ],
       });
     }
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages,
-        response_format: { type: 'json_object' }
+        response_format: { type: 'json_object' },
       }),
     });
 
@@ -79,13 +79,13 @@ Respond ONLY with a JSON object with these fields:
       if (response.status === 429) {
         return new Response(
           JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         );
       }
       if (response.status === 402) {
         return new Response(
           JSON.stringify({ error: 'Payment required. Please add credits to continue.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         );
       }
       const errorText = await response.text();
@@ -94,55 +94,77 @@ Respond ONLY with a JSON object with these fields:
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content ?? "";
 
-    // Robust JSON parsing: handle accidental Markdown fences and extract a balanced JSON object
+    // Extract content from standard or tool-calling responses
+    const choice = data?.choices?.[0];
+    let content: any = choice?.message?.content;
+    if (!content && choice?.message?.tool_calls?.[0]?.function?.arguments) {
+      content = choice.message.tool_calls[0].function.arguments;
+    }
+    if (typeof content !== 'string') {
+      try {
+        content = JSON.stringify(content);
+      } catch {
+        content = String(content ?? '');
+      }
+    }
+
+    // Robust JSON extraction helpers
     const extractJson = (text: string): string => {
-      const trimmed = (text || "").trim();
+      const t = (text || '').trim();
 
-      // Remove fenced code blocks (``` or ```json)
-      if (trimmed.startsWith("````")) {
-        // unlikely 4 ticks, but guard anyway
-        return trimmed.replace(/^````(?:json)?\s*/i, "").replace(/\s*````\s*$/i, "").trim();
+      // Strip common fenced blocks
+      if (t.startsWith('````')) {
+        return t.replace(/^````(?:json)?\s*/i, '').replace(/\s*````\s*$/i, '').trim();
       }
-      if (trimmed.startsWith("```")) {
-        const lines = trimmed.split(/\r?\n/);
-        if (lines[0].startsWith("```")) lines.shift();
-        while (lines.length && lines[lines.length - 1].trim() === "```") lines.pop();
-        return lines.join("\n").trim();
+      if (t.startsWith('```')) {
+        const lines = t.split(/\r?\n/);
+        if (lines[0].startsWith('```')) lines.shift();
+        while (lines.length && lines[lines.length - 1].trim() === '```') lines.pop();
+        return lines.join('\n').trim();
       }
 
-      // Balanced brace extraction
-      const start = trimmed.indexOf("{");
+      // Balanced brace scan
+      const start = t.indexOf('{');
       if (start !== -1) {
         let depth = 0;
-        for (let i = start; i < trimmed.length; i++) {
-          const ch = trimmed[i];
+        for (let i = start; i < t.length; i++) {
+          const ch = t[i];
           if (ch === '{') depth++;
           else if (ch === '}') {
             depth--;
-            if (depth === 0) {
-              return trimmed.slice(start, i + 1);
-            }
+            if (depth === 0) return t.slice(start, i + 1);
           }
         }
       }
 
-      // Regex fallback
-      const match = trimmed.match(/\{[\s\S]*\}/);
-      return match ? match[0] : trimmed.replace(/```/g, "").trim();
+      // Fallback regex
+      const match = t.match(/\{[\s\S]*\}/);
+      return match ? match[0] : t.replace(/```/g, '').trim();
     };
 
-    let result: EmotionResponse;
+    let result: EmotionResponse | null = null;
     try {
-      result = JSON.parse(content);
-    } catch {
-      const cleaned1 = extractJson(content);
+      result = JSON.parse(content) as EmotionResponse;
+    } catch (e1) {
       try {
-        result = JSON.parse(cleaned1);
-      } catch {
-        const cleaned2 = cleaned1.replace(/```/g, "").trim();
-        result = JSON.parse(cleaned2);
+        const cleaned1 = extractJson(content);
+        result = JSON.parse(cleaned1) as EmotionResponse;
+      } catch (e2) {
+        try {
+          const cleaned2 = extractJson(content).replace(/```/g, '').trim();
+          result = JSON.parse(cleaned2) as EmotionResponse;
+        } catch (e3) {
+          console.warn('Falling back due to JSON parse error', { contentSample: String(content).slice(0, 120) });
+          // Final safety fallback to avoid 500s
+          result = {
+            emotion: 'Neutral',
+            confidence: 0.0,
+            explanation: 'Unable to parse AI response reliably; defaulting to Neutral.',
+            emoji: '😐',
+            color: 'gray-400',
+          };
+        }
       }
     }
 
@@ -153,7 +175,7 @@ Respond ONLY with a JSON object with these fields:
     console.error('Error in analyze-emotion function:', error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });
