@@ -96,27 +96,54 @@ Respond ONLY with a JSON object with these fields:
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content ?? "";
 
-    // Robust JSON parsing: handle accidental Markdown fences or extra text
+    // Robust JSON parsing: handle accidental Markdown fences and extract a balanced JSON object
     const extractJson = (text: string): string => {
       const trimmed = (text || "").trim();
-      if (trimmed.startsWith("```") ) {
-        // remove leading ```json or ``` and trailing ```
-        return trimmed
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/```$/i, "")
-          .trim();
+
+      // Remove fenced code blocks (``` or ```json)
+      if (trimmed.startsWith("````")) {
+        // unlikely 4 ticks, but guard anyway
+        return trimmed.replace(/^````(?:json)?\s*/i, "").replace(/\s*````\s*$/i, "").trim();
       }
-      // fallback: grab first JSON object in the text
+      if (trimmed.startsWith("```")) {
+        const lines = trimmed.split(/\r?\n/);
+        if (lines[0].startsWith("```")) lines.shift();
+        while (lines.length && lines[lines.length - 1].trim() === "```") lines.pop();
+        return lines.join("\n").trim();
+      }
+
+      // Balanced brace extraction
+      const start = trimmed.indexOf("{");
+      if (start !== -1) {
+        let depth = 0;
+        for (let i = start; i < trimmed.length; i++) {
+          const ch = trimmed[i];
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) {
+              return trimmed.slice(start, i + 1);
+            }
+          }
+        }
+      }
+
+      // Regex fallback
       const match = trimmed.match(/\{[\s\S]*\}/);
-      return match ? match[0] : trimmed;
+      return match ? match[0] : trimmed.replace(/```/g, "").trim();
     };
 
     let result: EmotionResponse;
     try {
       result = JSON.parse(content);
     } catch {
-      const cleaned = extractJson(content);
-      result = JSON.parse(cleaned);
+      const cleaned1 = extractJson(content);
+      try {
+        result = JSON.parse(cleaned1);
+      } catch {
+        const cleaned2 = cleaned1.replace(/```/g, "").trim();
+        result = JSON.parse(cleaned2);
+      }
     }
 
     return new Response(JSON.stringify(result), {

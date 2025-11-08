@@ -153,11 +153,20 @@ const Index = () => {
 
     if (!context) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    context.drawImage(video, 0, 0);
+    // Downscale to reduce payload size for the edge function & AI gateway
+    const MAX_WIDTH = 768;
+    const vW = video.videoWidth || 640;
+    const vH = video.videoHeight || 360;
+    const scale = Math.min(1, MAX_WIDTH / vW);
+    const width = Math.max(1, Math.floor(vW * scale));
+    const height = Math.max(1, Math.floor(vH * scale));
 
-    const imageData = canvas.toDataURL('image/jpeg');
+    canvas.width = width;
+    canvas.height = height;
+    context.drawImage(video, 0, 0, width, height);
+
+    // Use JPEG with moderate quality to keep request small
+    const imageData = canvas.toDataURL('image/jpeg', 0.7);
     analyzeEmotion(InputMode.WEBCAM, imageData);
   };
 
